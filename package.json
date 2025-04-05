@@ -1,0 +1,30 @@
+{
+  "name": "bm2",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "bun-manager": "./src/app.ts"
+  },
+  "scripts": {
+    "start": "cross-env NODE_ENV=production bun run src/app.ts",
+    "start:dev": "cross-env NODE_ENV=development bun run src/app.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix ."
+  },
+  "dependencies": {
+    "bun-types": "^1.0.0"
+  },
+  "private": true,
+  "devDependencies": {
+    "@babel/core": "^7.26.10",
+    "@babel/eslint-parser": "^7.27.0",
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.29.0",
+    "@typescript-eslint/parser": "^8.29.0",
+    "cross-env": "^7.0.3",
+    "eslint": "^9.24.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
