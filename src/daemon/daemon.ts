@@ -1,20 +1,19 @@
-// daemon.ts
-import { ProcessManager } from "../manager/process-manager";
-import { Logger } from "../util/logger";
 import { createServer, Socket } from "net";
 import { join } from "path";
 import { homedir } from "os";
 import { existsSync, unlinkSync } from "fs";
 import { mkdir } from "node:fs/promises";
+import { ProcessManager } from "../manager/process-manager";
+import { Logger } from "../util/logger";
+import type { LogEntry } from "./types";
+
+// ========================= //
+// = Copyright (c) NullDev = //
+// ========================= //
 
 const CONFIG_DIR = join(homedir(), ".bun-manager");
 const SOCKET_PATH = join(CONFIG_DIR, "daemon.sock");
 const PID_FILE = join(CONFIG_DIR, "daemon.pid");
-
-interface LogEntry {
-    isError: boolean;
-    message: string;
-}
 
 class Daemon {
     private manager = new ProcessManager();
