@@ -1,236 +1,17 @@
 import { Logger } from "../util/logger";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { spawn } from "node:child_process";
+import { DaemonManager } from "./daemon-manager";
 import { Socket } from "node:net";
-import { mkdir } from "node:fs/promises";
-import { existsSync, unlinkSync } from "node:fs";
 
 // ========================= //
 // = Copyright (c) NullDev = //
 // ========================= //
 
-interface Message {
-    type: "start" | "stop" | "list" | "attach";
-    script?: string;
-    processId?: string;
-    options?: { restart?: boolean };
-}
-
-interface Process {
-    id: string;
-    script: string;
-    status: string;
-}
-
-interface Response {
-    status: "ok" | "error" | "stopped";
-    id?: string;
-    list?: Process[];
-    error?: string;
-}
-
 export class CLI {
-    private readonly CONFIG_DIR = join(homedir(), ".bun-manager");
-    private readonly PID_FILE = join(this.CONFIG_DIR, "daemon.pid");
-    private readonly SOCKET_PATH = join(this.CONFIG_DIR, "daemon.sock");
+    private daemonManager: DaemonManager;
 
     constructor() {
-        this.ensureConfigDir();
-        this.ensureDaemonRunning();
-    }
-
-    private async ensureConfigDir(): Promise<void> {
-        try {
-            await mkdir(this.CONFIG_DIR, { recursive: true });
-        }
-        catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-                throw error;
-            }
-        }
-    }
-
-    private async isDaemonRunning(): Promise<boolean> {
-        const pidFile = Bun.file(this.PID_FILE);
-        if (!await pidFile.exists()) {
-            Logger.debug("No PID file found, daemon is not running");
-            return false;
-        }
-
-        try {
-            const pidFileContent = await pidFile.text();
-            const pid = Number(pidFileContent);
-            if (!pidFileContent || isNaN(pid) || pid <= 0) {
-                Logger.debug("Invalid PID in PID file");
-                await Bun.write(this.PID_FILE, "");
-                return false;
-            }
-
-            try {
-                process.kill(pid, 0);
-                Logger.debug(`Daemon is running with PID: ${pid}`);
-                return true;
-            }
-            catch {
-                Logger.debug(`Daemon PID ${pid} not responding, cleaning up PID file`);
-                await Bun.write(this.PID_FILE, "");
-                return false;
-            }
-        }
-        catch (error) {
-            Logger.debug("Failed to read PID file:", { trace: error as Error });
-            await Bun.write(this.PID_FILE, "");
-            return false;
-        }
-    }
-
-    private async waitForDaemon(retries = 5): Promise<boolean> {
-        for (let i = 0; i < retries; i++) {
-            try {
-                const socket = new Socket();
-                await new Promise<void>((resolve, reject) => {
-                    socket.on("connect", () => {
-                        socket.end();
-                        resolve();
-                    });
-                    socket.on("error", (err) => {
-                        socket.destroy();
-                        reject(err);
-                    });
-                    socket.on("timeout", () => {
-                        socket.destroy();
-                        reject(new Error("Socket timeout"));
-                    });
-                    socket.setTimeout(5000);
-                    socket.connect(this.SOCKET_PATH);
-                });
-                return true;
-            }
-            catch (error) {
-                if (i === retries - 1) {
-                    Logger.error("Failed to connect to daemon:", { trace: error as Error });
-                    return false;
-                }
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-        return false;
-    }
-
-    private async ensureDaemonRunning(): Promise<void> {
-        if (!await this.isDaemonRunning()) {
-            // Clean up any existing socket file
-            if (existsSync(this.SOCKET_PATH)) {
-                try {
-                    unlinkSync(this.SOCKET_PATH);
-                    Logger.debug("Removed existing socket file");
-                }
-                catch (error) {
-                    Logger.error("Failed to remove socket file:", { trace: error as Error });
-                }
-            }
-
-            const proc = spawn("bun", [join(__dirname, "../daemon/daemon.ts")], {
-                detached: true,
-                stdio: process.env.NODE_ENV !== "production"
-                    ? ["ignore", process.stdout, process.stderr]
-                    : "ignore",
-            });
-            proc.unref();
-
-            const { pid } = proc;
-            if (!pid) {
-                Logger.error("Failed to get PID of daemon");
-                return;
-            }
-
-            await Bun.write(this.PID_FILE, String(pid));
-            Logger.debug(`Started new daemon with PID: ${pid}`);
-
-            if (!await this.waitForDaemon()) {
-                Logger.error("Failed to connect to daemon after startup");
-                process.exit(1);
-            }
-        }
-    }
-
-    private async sendMessage(message: Message, retries = 3): Promise<Response> {
-        for (let i = 0; i < retries; i++) {
-            try {
-                return await new Promise<Response>((resolve, reject) => {
-                    const socket = new Socket();
-                    let buffer = "";
-
-                    socket.on("connect", () => {
-                        socket.write(JSON.stringify(message) + "\n");
-                    });
-
-                    socket.on("data", (data) => {
-                        buffer += data.toString();
-                        if (buffer.endsWith("\n")) {
-                            try {
-                                const parsed = JSON.parse(buffer);
-                                resolve(parsed);
-                                socket.end();
-                            }
-                            catch (err) {
-                                reject(err);
-                            }
-                        }
-                    });
-
-                    socket.on("error", (err) => {
-                        socket.destroy();
-                        reject(err);
-                    });
-
-                    socket.on("timeout", () => {
-                        socket.destroy();
-                        reject(new Error("Socket timeout"));
-                    });
-
-                    socket.setTimeout(5000);
-                    socket.connect(this.SOCKET_PATH);
-                });
-            }
-            catch (err) {
-                if (i === retries - 1) throw err;
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-        throw new Error("Failed to send message after retries");
-    }
-
-    private async stopDaemon(): Promise<void> {
-        const pidFile = Bun.file(this.PID_FILE);
-        if (!await pidFile.exists()) {
-            Logger.debug("No PID file found, daemon already stopped");
-            return;
-        }
-
-        try {
-            const pid = Number(await pidFile.text());
-            if (isNaN(pid)) {
-                Logger.debug("Invalid PID in PID file");
-                await Bun.write(this.PID_FILE, "");
-                return;
-            }
-
-            try {
-                process.kill(pid);
-                await Bun.write(this.PID_FILE, "");
-                Logger.debug(`Successfully killed daemon with PID ${pid}`);
-            }
-            catch (error) {
-                Logger.error("Failed to stop daemon:", { trace: error as Error });
-                await Bun.write(this.PID_FILE, "");
-            }
-        }
-        catch (error) {
-            Logger.error("Failed to read PID file:", { trace: error as Error });
-            await Bun.write(this.PID_FILE, "");
-        }
+        this.daemonManager = new DaemonManager();
+        this.daemonManager.ensureDaemonRunning();
     }
 
     async handleCommand(command: string, args: string[]): Promise<void> {
@@ -251,11 +32,7 @@ export class CLI {
                 this.showHelp();
                 break;
             case "daemon":
-                if (args[0] === "stop") {
-                    await this.stopDaemon();
-                    Logger.info("Daemon stopped");
-                }
-                else Logger.info(`Daemon is ${await this.isDaemonRunning() ? "running" : "not running"}`);
+                await this.handleDaemonCommand(args);
                 break;
             default:
                 this.showHelp(command);
@@ -269,13 +46,18 @@ export class CLI {
             return;
         }
 
-        const response = await this.sendMessage({ type: "start", script, options: { restart: args.includes("--restart") } });
+        const response = await this.daemonManager.getSocketManager().sendMessage({
+            type: "start",
+            script,
+            options: { restart: args.includes("--restart") },
+        });
+
         if (response.status === "ok") Logger.info(`Started process with ID: ${response.id}`);
         else Logger.error(`Failed to start process: ${response.error}`);
     }
 
     private async handleList(): Promise<void> {
-        const response = await this.sendMessage({ type: "list" });
+        const response = await this.daemonManager.getSocketManager().sendMessage({ type: "list" });
         if (response.status !== "ok") {
             Logger.error(`Failed to list processes: ${response.error}`);
             return;
@@ -286,12 +68,10 @@ export class CLI {
             return;
         }
 
-        // Calculate column widths
         const idWidth = Math.max(2, ...response.list.map(p => p.id.length));
         const scriptWidth = Math.max(6, ...response.list.map(p => p.script.length));
         const statusWidth = Math.max(6, ...response.list.map(p => p.status.length));
 
-        // Print header
         Logger.raw(
             "┌" + "─".repeat(idWidth + 2) + "┬" +
             "─".repeat(scriptWidth + 2) + "┬" +
@@ -308,7 +88,6 @@ export class CLI {
             "─".repeat(statusWidth + 2) + "┤",
         );
 
-        // Print processes
         for (const process of response.list) {
             Logger.raw(
                 "│ " + process.id.padEnd(idWidth) + " │ " +
@@ -317,7 +96,6 @@ export class CLI {
             );
         }
 
-        // Print footer
         Logger.raw(
             "└" + "─".repeat(idWidth + 2) + "┴" +
             "─".repeat(scriptWidth + 2) + "┴" +
@@ -331,7 +109,7 @@ export class CLI {
             Logger.error("Provide a process ID");
             return;
         }
-        const response = await this.sendMessage({ type: "stop", processId });
+        const response = await this.daemonManager.getSocketManager().sendMessage({ type: "stop", processId });
         if (response.status === "ok") Logger.info(`Process ${processId} stopped`);
         else Logger.error(`Failed to stop process ${processId}`);
     }
@@ -344,7 +122,7 @@ export class CLI {
         }
 
         const socket = new Socket();
-        socket.connect(this.SOCKET_PATH, () => {
+        socket.connect(this.daemonManager.getSocketManager().getSocketPath(), () => {
             socket.write(JSON.stringify({ type: "attach", processId }) + "\n");
         });
 
@@ -366,6 +144,11 @@ export class CLI {
         process.stdin.on("data", (key) => {
             if (key.toString() === "\u0003") process.exit(); // Ctrl+C
         });
+    }
+
+    private async handleDaemonCommand(args: string[]): Promise<void> {
+        const command = args[0] || "status";
+        await this.daemonManager.handleDaemonCommand(command);
     }
 
     public showHelp(command?: string): void {
