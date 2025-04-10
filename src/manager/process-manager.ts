@@ -2,37 +2,11 @@ import Bun from "bun";
 import { join } from "path";
 import { homedir } from "os";
 import { Logger } from "../util/logger";
+import type { ProcessInfo, ProcessOptions, ProcessListInfo, LogEntry } from "./types";
 
 // ========================= //
 // = Copyright (c) NullDev = //
 // ========================= //
-
-interface LogEntry {
-    timestamp: Date;
-    message: string;
-    isError?: boolean;
-}
-
-interface ProcessOptions {
-    restart?: boolean;
-    maxLogLines?: number;
-}
-
-interface ProcessInfo {
-    id: string;
-    script: string;
-    process: Bun.Subprocess;
-    startTime: Date;
-    logs: LogEntry[];
-    options: ProcessOptions;
-}
-
-interface ProcessListInfo {
-    id: string;
-    script: string;
-    uptime: number;
-    status: string;
-}
 
 export class ProcessManager {
     private processes: Map<string, ProcessInfo>;

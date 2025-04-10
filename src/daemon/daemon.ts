@@ -33,8 +33,8 @@ class Daemon {
             await this.cleanup();
 
             await this.manager.init();
-            Logger.info("Bun Manager daemon started");
 
+            Logger.info("Bun Manager daemon started");
             Logger.debug(`Attempting to bind to socket: ${SOCKET_PATH}`);
 
             this.server = createServer(async(socket: Socket) => {
