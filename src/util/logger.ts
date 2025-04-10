@@ -1,11 +1,8 @@
+import type { LogOptions } from "./types";
+
 // ========================= //
 // = Copyright (c) NullDev = //
 // ========================= //
-
-interface LogOptions {
-    force?: boolean;
-    trace?: Error;
-}
 
 /**
  * Logging utility class
